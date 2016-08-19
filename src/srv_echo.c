@@ -22,6 +22,7 @@
 #include <plog.h>
 #include "common.h"
 #include "service.h"
+#include "request.h"
 #include "header.h"
 #include "body.h"
 #include "simple_api.h"
@@ -90,6 +91,8 @@ typedef struct http_info{
     char *clientip;
     char *content_type;
     char *boundary;
+    
+    char host[MAX_URL_SIZE];
     char method[MAX_METHOD_SIZE];
     char url[MAX_URL_SIZE];
 #if 0
@@ -115,6 +118,8 @@ int extract_http_info(ci_request_t *, ci_headers_list_t *, struct http_info *);
 int wymail_my(webmail_string_and_len *, webmail_info *);
 int jdmail_type_my(char *);
 int jdmail_my(char *);
+
+extern int mk_responce_header(ci_request_t *);
 
 CI_DECLARE_MOD_DATA ci_service_module_t service = {
     "echo",                         /* mod_name, The module name */
@@ -455,7 +460,7 @@ int recv_msg_from_policy(struct file_msg *arg)
 //static int kTest;
 //extern int kTest2;
 //extern file_content_t *pfc;
-
+static const char *blocked_request = "GET / HTTP/1.1";
 int echo_end_of_data_handler(ci_request_t * req)
 {
     ci_debug_printf(5, "\033[0;31m");
@@ -536,19 +541,32 @@ int echo_end_of_data_handler(ci_request_t * req)
             ci_debug_printf(0, "ERROR echo_check_preview_handler: bad http header, aborting.\n");
             return CI_ERROR;
         }
-        const char *host = ci_headers_value(req_header, "Host");
-        ci_http_request_reset_headers(req);
-        snprintf(buf, strlen("GET / HTTP/1.1"), "GET / HTTP/1.1");
-        ci_http_request_add_header(req, buf);
+        /* const char *host = ci_headers_value(req_header, "Host");
+        ci_debug_printf(9, "Host is %s\n", host); */
+
+
+        req->packed = 0;
+        if(ci_http_request_reset_headers(req))
+            ci_debug_printf(9, "ci_http_request_reset_headers success\n");
+        /* snprintf(buf, strlen("GET / HTTP/1.1"), "GET / HTTP/1.1"); */
+        /* snprintf(buf, strlen(blocked_request), blocked_request);
+        buf[strlen(blocked_request)] = '\0';
+        ci_debug_printf(9, "add %s\n", ci_http_request_add_header(req, buf)); */
         bzero(buf, strlen(buf));
-        snprintf(buf, strlen(host), "Host: %s", host);
-        ci_http_request_add_header(req, buf);
-        ci_http_response_add_header(req, "Connection: keepalive");
-        ci_http_response_add_header(req, "Content-Type: text/html");
-        ci_http_response_add_header(req, "Content-Language: en");
-        req->hasbody = 0;
-        //ci_request_pack(req);
+        ci_http_request_add_header(req, blocked_request);
         
+#if 1
+        snprintf(buf, strlen(echo_data->httpinf->host), "Host: %s", echo_data->httpinf->host);
+        ci_debug_printf(9, "host len is %d\n", strlen(echo_data->httpinf->host));
+        buf[strlen(echo_data->httpinf->host)] = '\0';
+        ci_http_request_add_header(req, buf);
+#endif
+        ci_http_request_add_header(req, "Connection: keepalive");
+        ci_http_request_add_header(req, "Content-Type: text/html");
+        ci_http_request_add_header(req, "Content-Language: en");
+        //ci_request_pack(req);
+        req->status = SEND_BLOCKED;
+
         ci_debug_printf(9, "send redirect FINISH!\n");
 #endif
         echo_data->blocked = BLOCKED;
@@ -873,6 +891,7 @@ int extract_http_info(ci_request_t * req, ci_headers_list_t * req_header,
        */
     httpinf->url[0]='\0';
     httpinf->method[0] = '\0';
+    httpinf->host[0] = '\0';
     httpinf->content_type = (char *)malloc(MAX_CONTENT_TYPE);
     memset(httpinf->content_type, 0, MAX_CONTENT_TYPE);
     httpinf->boundary = (char *)malloc(MAX_BOUNDARY_SIZE);
@@ -915,7 +934,18 @@ int extract_http_info(ci_request_t * req, ci_headers_list_t * req_header,
     if (*str != 'H' || *(str + 4) != '/') {
         return 0;
     }
-    const char *temp = NULL;
+
+    const char *host = ci_headers_value(req_header, "Host");
+    /* host += 4; */
+    while( isspace(*host) || *host == ':')host++;
+    const char *temp = strnstr(host, "\r\n", MAX_URL_SIZE);
+    int len = temp - host;
+    for(i = 0; i < len; i++){
+        httpinf->host[i] = host[i];
+    }
+    httpinf->host[i] = '\0';
+    ci_debug_printf(9, "DEBUG Host: %s\n", httpinf->host);
+
     if ((temp = ci_headers_value(req->request_header, "X-Client-IP")) != NULL) {
         memcpy(httpinf->clientip, temp, MAX_IP_SIZE);
         ci_debug_printf(2, "DEBUG echo_check_preview_handler: X-Client-IP: %s\n", httpinf->clientip);
